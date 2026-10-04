@@ -13,17 +13,14 @@ import (
 )
 
 const (
-	stateFileName       = "state.json"
-	reservationFileName = "reservations.json"
+	stateFileName = "state.json"
 )
 
 type Store struct {
-	mu              sync.RWMutex
-	path            string
-	reservationPath string
-	snapshot        domain.Snapshot
-	reservations    domain.ReservationLedger
-	now             func() time.Time
+	mu       sync.RWMutex
+	path     string
+	snapshot domain.Snapshot
+	now      func() time.Time
 }
 
 func Open(dataDir string) (*Store, error) {
@@ -31,93 +28,14 @@ func Open(dataDir string) (*Store, error) {
 		return nil, fmt.Errorf("create data directory: %w", err)
 	}
 	store := &Store{
-		path:            filepath.Join(dataDir, stateFileName),
-		reservationPath: filepath.Join(dataDir, reservationFileName),
-		snapshot:        domain.EmptySnapshot(),
-		reservations:    domain.EmptyReservationLedger(),
-		now:             func() time.Time { return time.Now().UTC() },
+		path:     filepath.Join(dataDir, stateFileName),
+		snapshot: domain.EmptySnapshot(),
+		now:      func() time.Time { return time.Now().UTC() },
 	}
 	if err := store.load(); err != nil {
 		return nil, err
 	}
-	if err := store.loadReservations(); err != nil {
-		return nil, err
-	}
 	return store, nil
-}
-
-// readReservations loads the durable unique-key reservation ledger. A missing
-// file is a normal first start.
-func readReservations(path string) (domain.ReservationLedger, error) {
-	raw, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return domain.EmptyReservationLedger(), nil
-	}
-	if err != nil {
-		return domain.ReservationLedger{}, fmt.Errorf("read reservations: %w", err)
-	}
-	var loaded domain.ReservationLedger
-	if err := json.Unmarshal(raw, &loaded); err != nil {
-		return domain.ReservationLedger{}, fmt.Errorf("decode reservations: %w", err)
-	}
-	if loaded.Entries == nil {
-		loaded.Entries = map[string]domain.Reservation{}
-	}
-	return loaded, nil
-}
-
-func writeReservations(path string, ledger domain.ReservationLedger) error {
-	return writeSnapshot(path, ledger)
-}
-
-func (s *Store) loadReservations() error {
-	ledger, err := readReservations(s.reservationPath)
-	if err != nil {
-		return err
-	}
-	s.reservations = ledger
-	return nil
-}
-
-// Claim reserves a unique business key before a create request is validated.
-// The reservation is written through before the caller continues so that a
-// concurrent duplicate create cannot slip past the check.
-func (s *Store) Claim(kind domain.ReservationKind, key, owner string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if key == "" {
-		return nil
-	}
-	updated := s.reservations.Clone()
-	if err := updated.Claim(kind, key, owner, s.now()); err != nil {
-		return err
-	}
-	if err := writeReservations(s.reservationPath, updated); err != nil {
-		return domain.NewError(domain.CodeStorage, err.Error())
-	}
-	s.reservations = updated
-	return nil
-}
-
-// Commit confirms a reservation once the caller intends to keep it.
-func (s *Store) Commit(kind domain.ReservationKind, key, owner string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	updated := s.reservations.Clone()
-	updated.Commit(kind, key, owner)
-	if err := writeReservations(s.reservationPath, updated); err != nil {
-		return domain.NewError(domain.CodeStorage, err.Error())
-	}
-	s.reservations = updated
-	return nil
-}
-
-// Release applies the ledger transition for an owner that is giving the key
-// back. The returned ledger is kept in memory for the rest of this process.
-func (s *Store) Release(kind domain.ReservationKind, key, owner string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.reservations.Release(kind, key, owner)
 }
 
 func (s *Store) load() error {

@@ -1,7 +1,6 @@
 package service
 
 import (
-	"errors"
 	"sort"
 
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/domain"
@@ -28,20 +27,10 @@ func (s *Service) CreateRun(input CreateRunInput) (domain.FermentationRun, error
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
-	owner, err := generateEntityID("claim")
-	if err != nil {
-		return domain.FermentationRun{}, domain.NewError(domain.CodeStorage, err.Error())
-	}
-	if err := s.store.Claim(domain.ReservationRunCode, run.Code, owner); err != nil {
-		if errors.Is(err, domain.ErrReservationHeld) {
-			return domain.FermentationRun{}, domain.NewError(domain.CodeRunConflict,
-				"a run with the same code already exists")
-		}
-		return domain.FermentationRun{}, err
-	}
-	if err := s.store.Commit(domain.ReservationRunCode, run.Code, owner); err != nil {
-		return domain.FermentationRun{}, err
-	}
+	// Validate before any state is touched so a rejected request (bad volume,
+	// malformed code) cannot leave the run code occupied. Code uniqueness is
+	// enforced atomically under the store write lock against the durable run
+	// index below.
 	if err := run.Validate(); err != nil {
 		return domain.FermentationRun{}, err
 	}
@@ -71,7 +60,6 @@ func (s *Service) CreateRun(input CreateRunInput) (domain.FermentationRun, error
 	if err != nil {
 		return domain.FermentationRun{}, err
 	}
-	s.store.Release(domain.ReservationRunCode, run.Code, owner)
 	return run.Clone(), nil
 }
 

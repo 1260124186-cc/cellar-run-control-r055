@@ -1,7 +1,6 @@
 package service
 
 import (
-	"errors"
 	"sort"
 	"time"
 
@@ -25,21 +24,9 @@ func (s *Service) CreateFormula(input CreateFormulaInput) (domain.Formula, error
 		UpdatedAt:             now,
 	}
 	formula.Normalize()
-	nameKey := domain.NameKey(formula.Name)
-	owner, err := generateEntityID("claim")
-	if err != nil {
-		return domain.Formula{}, domain.NewError(domain.CodeStorage, err.Error())
-	}
-	if err := s.store.Claim(domain.ReservationFormulaName, nameKey, owner); err != nil {
-		if errors.Is(err, domain.ErrReservationHeld) {
-			return domain.Formula{}, domain.NewError(domain.CodeFormulaNameConflict,
-				"a formula with the same normalized name already exists")
-		}
-		return domain.Formula{}, err
-	}
-	if err := s.store.Commit(domain.ReservationFormulaName, nameKey, owner); err != nil {
-		return domain.Formula{}, err
-	}
+	// Validate before any state is touched so a rejected request cannot leave
+	// the name occupied. Uniqueness is enforced atomically under the store
+	// write lock against the durable name index below.
 	if err := formula.Validate(); err != nil {
 		return domain.Formula{}, err
 	}
@@ -50,6 +37,7 @@ func (s *Service) CreateFormula(input CreateFormulaInput) (domain.Formula, error
 	formula.ID = id
 
 	err = s.store.Execute(func(snapshot *domain.Snapshot) error {
+		nameKey := domain.NameKey(formula.Name)
 		if _, exists := snapshot.NameIndex[nameKey]; exists {
 			return domain.NewError(domain.CodeFormulaNameConflict,
 				"a formula with the same normalized name already exists")
@@ -61,7 +49,6 @@ func (s *Service) CreateFormula(input CreateFormulaInput) (domain.Formula, error
 	if err != nil {
 		return domain.Formula{}, err
 	}
-	s.store.Release(domain.ReservationFormulaName, nameKey, owner)
 	return formula.Clone(), nil
 }
 

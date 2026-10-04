@@ -1,7 +1,6 @@
 package service
 
 import (
-	"errors"
 	"sort"
 
 	"github.com/1260124186-cc/solo-0016-cellar-run-control/internal/domain"
@@ -17,20 +16,9 @@ func (s *Service) CreateVessel(input CreateVesselInput) (domain.Vessel, error) {
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	owner, err := generateEntityID("claim")
-	if err != nil {
-		return domain.Vessel{}, domain.NewError(domain.CodeStorage, err.Error())
-	}
-	if err := s.store.Claim(domain.ReservationVesselCode, vessel.Code, owner); err != nil {
-		if errors.Is(err, domain.ErrReservationHeld) {
-			return domain.Vessel{}, domain.NewError(domain.CodeVesselConflict,
-				"a vessel with the same code already exists")
-		}
-		return domain.Vessel{}, err
-	}
-	if err := s.store.Commit(domain.ReservationVesselCode, vessel.Code, owner); err != nil {
-		return domain.Vessel{}, err
-	}
+	// Validate first so an out-of-range capacity or malformed code cannot leave
+	// the code occupied. Code uniqueness is enforced under the store write lock
+	// against the durable vessel index below.
 	if err := vessel.Validate(); err != nil {
 		return domain.Vessel{}, err
 	}
@@ -52,7 +40,6 @@ func (s *Service) CreateVessel(input CreateVesselInput) (domain.Vessel, error) {
 	if err != nil {
 		return domain.Vessel{}, err
 	}
-	s.store.Release(domain.ReservationVesselCode, vessel.Code, owner)
 	return vessel, nil
 }
 
