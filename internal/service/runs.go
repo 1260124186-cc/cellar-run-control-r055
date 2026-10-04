@@ -39,15 +39,15 @@ func (s *Service) CreateRun(input CreateRunInput) (domain.FermentationRun, error
 		}
 		return domain.FermentationRun{}, err
 	}
-	if err := s.store.Commit(domain.ReservationRunCode, run.Code, owner); err != nil {
-		return domain.FermentationRun{}, err
-	}
 	if err := run.Validate(); err != nil {
-		return domain.FermentationRun{}, err
+		return domain.FermentationRun{}, s.releaseClaim(
+			domain.ReservationRunCode, run.Code, owner, err)
 	}
 	id, err := generateEntityID("run")
 	if err != nil {
-		return domain.FermentationRun{}, domain.NewError(domain.CodeStorage, err.Error())
+		return domain.FermentationRun{}, s.releaseClaim(
+			domain.ReservationRunCode, run.Code, owner,
+			domain.NewError(domain.CodeStorage, err.Error()))
 	}
 	run.ID = id
 
@@ -69,9 +69,12 @@ func (s *Service) CreateRun(input CreateRunInput) (domain.FermentationRun, error
 		return nil
 	})
 	if err != nil {
+		return domain.FermentationRun{}, s.releaseClaim(
+			domain.ReservationRunCode, run.Code, owner, err)
+	}
+	if err := s.store.Commit(domain.ReservationRunCode, run.Code, owner); err != nil {
 		return domain.FermentationRun{}, err
 	}
-	s.store.Release(domain.ReservationRunCode, run.Code, owner)
 	return run.Clone(), nil
 }
 

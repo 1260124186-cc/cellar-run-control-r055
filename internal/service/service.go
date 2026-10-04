@@ -36,6 +36,22 @@ func generateEntityID(prefix string) (string, error) {
 	return domain.NewID(prefix)
 }
 
+// releaseClaim drops the pending uniqueness claim of a create that is being
+// rejected and returns the rejection cause. A failed create must not leave
+// its name or code occupied; if the release itself cannot be persisted, the
+// storage failure is reported instead of the cause.
+func (s *Service) releaseClaim(
+	kind domain.ReservationKind,
+	key string,
+	owner string,
+	cause error,
+) error {
+	if err := s.store.Release(kind, key, owner); err != nil {
+		return err
+	}
+	return cause
+}
+
 func generatedRunCode() (string, error) {
 	value, err := domain.NewID("run")
 	if err != nil {

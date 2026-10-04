@@ -28,15 +28,15 @@ func (s *Service) CreateVessel(input CreateVesselInput) (domain.Vessel, error) {
 		}
 		return domain.Vessel{}, err
 	}
-	if err := s.store.Commit(domain.ReservationVesselCode, vessel.Code, owner); err != nil {
-		return domain.Vessel{}, err
-	}
 	if err := vessel.Validate(); err != nil {
-		return domain.Vessel{}, err
+		return domain.Vessel{}, s.releaseClaim(
+			domain.ReservationVesselCode, vessel.Code, owner, err)
 	}
 	id, err := generateEntityID("vessel")
 	if err != nil {
-		return domain.Vessel{}, domain.NewError(domain.CodeStorage, err.Error())
+		return domain.Vessel{}, s.releaseClaim(
+			domain.ReservationVesselCode, vessel.Code, owner,
+			domain.NewError(domain.CodeStorage, err.Error()))
 	}
 	vessel.ID = id
 
@@ -50,9 +50,12 @@ func (s *Service) CreateVessel(input CreateVesselInput) (domain.Vessel, error) {
 		return nil
 	})
 	if err != nil {
+		return domain.Vessel{}, s.releaseClaim(
+			domain.ReservationVesselCode, vessel.Code, owner, err)
+	}
+	if err := s.store.Commit(domain.ReservationVesselCode, vessel.Code, owner); err != nil {
 		return domain.Vessel{}, err
 	}
-	s.store.Release(domain.ReservationVesselCode, vessel.Code, owner)
 	return vessel, nil
 }
 

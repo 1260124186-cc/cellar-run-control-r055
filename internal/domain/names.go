@@ -111,6 +111,17 @@ func reservationSlot(kind ReservationKind, key string) string {
 	return string(kind) + "|" + key
 }
 
+// parseReservationSlot splits a ledger slot back into its kind and key. The
+// kind never contains the separator, while a key (for example a formula
+// name) may, so only the first separator is significant.
+func parseReservationSlot(slot string) (ReservationKind, string, bool) {
+	kind, key, found := strings.Cut(slot, "|")
+	if !found || kind == "" || key == "" {
+		return "", "", false
+	}
+	return ReservationKind(kind), key, true
+}
+
 // Claim records a reservation for one entity namespace. A key that is already
 // reserved, in any stage of its lifecycle, cannot be claimed again.
 func (l *ReservationLedger) Claim(
@@ -162,4 +173,27 @@ func (l *ReservationLedger) Release(kind ReservationKind, key, owner string) {
 		return
 	}
 	delete(l.Entries, slot)
+}
+
+// Retain keeps only reservations whose key is still backed by a persisted
+// entity, marking the survivors committed. Reservations left behind by a
+// rejected or interrupted create have no such entity and are dropped, so a
+// restart cannot resurrect an occupation for a record that never existed.
+// It reports whether the ledger changed.
+func (l *ReservationLedger) Retain(alive func(ReservationKind, string) bool) bool {
+	changed := false
+	for slot, entry := range l.Entries {
+		kind, key, ok := parseReservationSlot(slot)
+		if !ok || !alive(kind, key) {
+			delete(l.Entries, slot)
+			changed = true
+			continue
+		}
+		if !entry.Committed {
+			entry.Committed = true
+			l.Entries[slot] = entry
+			changed = true
+		}
+	}
+	return changed
 }

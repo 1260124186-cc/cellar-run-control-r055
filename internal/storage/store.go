@@ -43,6 +43,9 @@ func Open(dataDir string) (*Store, error) {
 	if err := store.loadReservations(); err != nil {
 		return nil, err
 	}
+	if err := store.reconcileReservations(); err != nil {
+		return nil, err
+	}
 	return store, nil
 }
 
@@ -113,11 +116,54 @@ func (s *Store) Commit(kind domain.ReservationKind, key, owner string) error {
 }
 
 // Release applies the ledger transition for an owner that is giving the key
-// back. The returned ledger is kept in memory for the rest of this process.
-func (s *Store) Release(kind domain.ReservationKind, key, owner string) {
+// back. The updated ledger is written through so that a rejected create does
+// not keep occupying its key after a restart.
+func (s *Store) Release(kind domain.ReservationKind, key, owner string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.reservations.Release(kind, key, owner)
+	if key == "" {
+		return nil
+	}
+	updated := s.reservations.Clone()
+	updated.Release(kind, key, owner)
+	if err := writeReservations(s.reservationPath, updated); err != nil {
+		return domain.NewError(domain.CodeStorage, err.Error())
+	}
+	s.reservations = updated
+	return nil
+}
+
+// reconcileReservations drops durable reservations that have no matching
+// entity in the snapshot. A reservation left behind by a rejected or
+// interrupted create must not occupy its key after recovery; reservations
+// that correspond to a persisted entity are kept and marked committed.
+func (s *Store) reconcileReservations() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	reconciled := s.reservations.Clone()
+	changed := reconciled.Retain(func(kind domain.ReservationKind, key string) bool {
+		switch kind {
+		case domain.ReservationFormulaName:
+			_, ok := s.snapshot.NameIndex[key]
+			return ok
+		case domain.ReservationVesselCode:
+			_, ok := s.snapshot.VesselIndex[key]
+			return ok
+		case domain.ReservationRunCode:
+			_, ok := s.snapshot.RunIndex[key]
+			return ok
+		default:
+			return false
+		}
+	})
+	if !changed {
+		return nil
+	}
+	if err := writeReservations(s.reservationPath, reconciled); err != nil {
+		return domain.NewError(domain.CodeStorage, err.Error())
+	}
+	s.reservations = reconciled
+	return nil
 }
 
 func (s *Store) load() error {

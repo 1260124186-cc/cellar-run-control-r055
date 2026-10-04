@@ -37,15 +37,15 @@ func (s *Service) CreateFormula(input CreateFormulaInput) (domain.Formula, error
 		}
 		return domain.Formula{}, err
 	}
-	if err := s.store.Commit(domain.ReservationFormulaName, nameKey, owner); err != nil {
-		return domain.Formula{}, err
-	}
 	if err := formula.Validate(); err != nil {
-		return domain.Formula{}, err
+		return domain.Formula{}, s.releaseClaim(
+			domain.ReservationFormulaName, nameKey, owner, err)
 	}
 	id, err := generateEntityID("formula")
 	if err != nil {
-		return domain.Formula{}, domain.NewError(domain.CodeStorage, err.Error())
+		return domain.Formula{}, s.releaseClaim(
+			domain.ReservationFormulaName, nameKey, owner,
+			domain.NewError(domain.CodeStorage, err.Error()))
 	}
 	formula.ID = id
 
@@ -59,9 +59,12 @@ func (s *Service) CreateFormula(input CreateFormulaInput) (domain.Formula, error
 		return nil
 	})
 	if err != nil {
+		return domain.Formula{}, s.releaseClaim(
+			domain.ReservationFormulaName, nameKey, owner, err)
+	}
+	if err := s.store.Commit(domain.ReservationFormulaName, nameKey, owner); err != nil {
 		return domain.Formula{}, err
 	}
-	s.store.Release(domain.ReservationFormulaName, nameKey, owner)
 	return formula.Clone(), nil
 }
 
